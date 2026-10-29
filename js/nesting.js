@@ -157,25 +157,79 @@
     return false;
   }
 
-  function computePitch(opt, gap) {
-    if (opt._pitch !== undefined) return opt._pitch;
+  function masksFor(opt, gap) {
+    if (opt._masks !== undefined) return opt._masks;
     var pad = Math.max(0, Math.round(gap / (2 * RES)));
     var wCells = Math.ceil(opt.w / RES);
     var hCells = Math.ceil(opt.h / RES);
     if (wCells < 6 || hCells < 6 || wCells * hCells > 120000) {
-      opt._pitch = opt.w;
-      return opt._pitch;
+      opt._masks = null;
+      return null;
     }
-    var A = buildMask(opt.ptsA, opt.w, opt.h, pad);
-    var B = buildMask(opt.ptsB, opt.w, opt.h, pad);
-    var start = Math.max(2, Math.floor(wCells * 0.45));
+    opt._masks = {
+      A: buildMask(opt.ptsA, opt.w, opt.h, pad),
+      B: buildMask(opt.ptsB, opt.w, opt.h, pad),
+      wCells: wCells
+    };
+    return opt._masks;
+  }
+
+  function computePitch(opt, gap) {
+    if (opt._pitch !== undefined) return opt._pitch;
+    var mk = masksFor(opt, gap);
+    if (!mk) { opt._pitch = opt.w; return opt._pitch; }
+    var start = Math.max(2, Math.floor(mk.wCells * 0.45));
     var pitch = opt.w;
-    for (var dx = start; dx < wCells; dx++) {
-      // 交替排布时 A→B 与 B→A 两种相邻关系都必须无碰撞
-      if (!masksOverlap(A, B, dx) && !masksOverlap(B, A, dx)) { pitch = dx * RES; break; }
+    for (var dx = start; dx < mk.wCells; dx++) {
+      // 均匀兜底：A→B 与 B→A 两种相邻关系都必须无碰撞
+      if (!masksOverlap(mk.A, mk.B, dx) && !masksOverlap(mk.B, mk.A, dx)) {
+        pitch = dx * RES;
+        break;
+      }
     }
     opt._pitch = pitch;
     return pitch;
+  }
+
+  // 单向栅格估计：A 在左、B 在右（dir=1），或 B 在左、A 在右（dir=-1）
+  function rasterDirPitch(opt, gap, dir) {
+    var mk = masksFor(opt, gap);
+    if (!mk) return opt.w;
+    var start = Math.max(2, Math.floor(mk.wCells * 0.35));
+    for (var dx = start; dx < mk.wCells; dx++) {
+      var hit = dir > 0 ? masksOverlap(mk.A, mk.B, dx) : masksOverlap(mk.B, mk.A, dx);
+      if (!hit) return dx * RES;
+    }
+    return opt.w;
+  }
+
+  function exactPairPitch(A, B, gap, start, w) {
+    var lo = Math.max(2, start - 8);
+    var hi = Math.min(w + gap, start + 24);
+    for (var d = lo; d <= hi + 1e-9; d += 0.5) {
+      if (polyClearance(A, B, d) >= gap) return d;
+    }
+    return null;
+  }
+
+  // 交替排布的位置：A 在 0，B 在 pA，A 在 pA+pB，B 在 2pA+pB …
+  function patternLayout(pA, pB, w, width) {
+    var xs = [0], x = 0, k = 1;
+    while (true) {
+      x += (k % 2 === 1) ? pA : pB;
+      if (x + w > width + 1e-9) break;
+      xs.push(x);
+      k++;
+      if (xs.length > 600) break;
+    }
+    return { count: xs.length, last: x };
+  }
+
+  // 相邻两对已经精确校验，还需校验隔片 A-A / B-B（间隔 pA+pB）
+  function patternPitchOk(A, B, pA, pB, w, gap) {
+    var s = pA + pB;
+    if (s - w >= gap - 1e-9) return true;
+    return polyClearance(A, A, s) >= gap && polyClearance(B, B, s) >= gap;
   }
 
   /* ---------- 精确几何校验 ----------
@@ -321,6 +375,8 @@
         ptsB: b.pts,
         interlock: false,
         pitch: a.w + gap,
+        pitchA: a.w + gap,
+        pitchB: a.w + gap,
         clearance: gap,
         rowH: a.h
       };
@@ -330,38 +386,51 @@
         options.push(opt);
       }
       if (allowInterlock && modeKey !== 'none' && opt.w >= 10) {
-        var res = exactPitch(opt, gap);
-        var improved = false;
-        if (res && res.pitch < opt.w - 0.01) {
-          var perInt = Math.floor((width - opt.w) / res.pitch) + 1;
-          if (perInt > perPlain) {
-            improved = true;
+        // 两种相邻方向分别求最小排距：A→B 与 B→A 可以不同
+        var pA = exactPairPitch(opt.ptsA, opt.ptsB, gap,
+          rasterDirPitch(opt, gap, 1), opt.w);
+        var pB = exactPairPitch(opt.ptsB, opt.ptsA, gap,
+          rasterDirPitch(opt, gap, -1), opt.w);
+        if (pA === null) pA = opt.w + gap;
+        if (pB === null) pB = opt.w + gap;
+
+        if (patternPitchOk(opt.ptsA, opt.ptsB, pA, pB, opt.w, gap)) {
+          var lay = patternLayout(pA, pB, opt.w, width);
+          var forced = (modeKey === 'lr' || modeKey === 'tb');
+          if (lay.count > perPlain || (forced && lay.count >= perPlain && perPlain >= 1)) {
             options.push({
               rot: userDeg,
               mode: modeKey,
               w: opt.w, h: opt.h,
               ptsA: opt.ptsA, ptsB: opt.ptsB,
               interlock: true,
-              pitch: res.pitch,
-              clearance: res.clearance,
+              pitch: (pA + pB) / 2,
+              pitchA: pA, pitchB: pB,
+              clearance: gap,
+              rowH: opt.h,
+              perRow: lay.count
+            });
+          }
+        }
+
+        // 均匀排距兜底：少数形状只有固定排距才合法
+        var pu = exactPitch(opt, gap);
+        if (pu && pu < opt.w - 0.01) {
+          var perInt = Math.floor((width - opt.w) / pu) + 1;
+          if (perInt > perPlain) {
+            options.push({
+              rot: userDeg,
+              mode: modeKey,
+              w: opt.w, h: opt.h,
+              ptsA: opt.ptsA, ptsB: opt.ptsB,
+              interlock: true,
+              pitch: pu,
+              pitchA: pu, pitchB: pu,
+              clearance: gap,
               rowH: opt.h,
               perRow: perInt
             });
           }
-        }
-        // 明确选择左右/上下交错时，即使排距无法再压缩，也保留相邻片翻转的外观
-        if (!improved && (modeKey === 'lr' || modeKey === 'tb') && perPlain >= 1) {
-          options.push({
-            rot: userDeg,
-            mode: modeKey,
-            w: opt.w, h: opt.h,
-            ptsA: opt.ptsA, ptsB: opt.ptsB,
-            interlock: true,
-            pitch: opt.w + gap,
-            clearance: gap,
-            rowH: opt.h,
-            perRow: perPlain
-          });
         }
       }
     });
@@ -384,7 +453,8 @@
       if (better || tieInter) {
         best = {
           rot: o.rot, mode: o.mode, w: o.w, h: o.h, ptsA: o.ptsA, ptsB: o.ptsB,
-          interlock: o.interlock, pitch: o.pitch, rowH: o.rowH,
+          interlock: o.interlock, pitch: o.pitch, pitchA: o.pitchA, pitchB: o.pitchB,
+          rowH: o.rowH,
           clearance: o.clearance === undefined ? gap : o.clearance,
           perRow: o.perRow, rows: rows, length: len
         };
@@ -443,6 +513,8 @@
           rowH: opt.rowH,
           pitch: opt.pitch,
           interlock: opt.interlock,
+          pitchA: opt.pitchA,
+          pitchB: opt.pitchB,
           clearance: opt.clearance,
           rot: opt.rot,
           mode: opt.mode,

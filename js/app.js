@@ -557,6 +557,11 @@
 
   /* ================= 可视化 ================= */
 
+  // 交替排布：A 在 0，B 在 pA，A 在 pA+pB，B 在 2pA+pB …
+  function pieceOffset(g, k) {
+    return Math.floor(k / 2) * (g.pitchA + g.pitchB) + (k % 2 ? g.pitchA : 0);
+  }
+
   function createViz() {
     var canvas = $('#vizCanvas');
     var ctx = canvas.getContext('2d');
@@ -808,13 +813,13 @@
 
             if (tooMany) {
               var xa = px(0);
-              var xb = px((n - 1) * g.pitch + g.w);
+              var xb = px(pieceOffset(g, n - 1) + g.w);
               ctx.fillStyle = hexA(g.color, .26);
               ctx.fillRect(xa, yTop, Math.max(0.8, xb - xa), hPx);
             } else {
               for (var k = 0; k < n; k++) {
                 var pts = (g.interlock && (k & 1)) ? g.ptsB : g.ptsA;
-                var ox = k * g.pitch;
+                var ox = pieceOffset(g, k);
                 ctx.beginPath();
                 for (var j = 0; j < pts.length; j++) {
                   var X = px(ox + pts[j][0]);
