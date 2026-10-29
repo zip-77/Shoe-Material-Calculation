@@ -66,6 +66,30 @@
     return { pts: out2, w: maxX - minX, h: maxY - minY };
   }
 
+  // 左右翻转（镜像 X）
+  function mirrorX(shape) {
+    var out = new Array(shape.pts.length);
+    for (var i = 0; i < shape.pts.length; i++) {
+      out[i] = [shape.w - shape.pts[i][0], shape.pts[i][1]];
+    }
+    return { pts: out, w: shape.w, h: shape.h };
+  }
+
+  // 上下翻转（镜像 Y）
+  function mirrorY(shape) {
+    var out = new Array(shape.pts.length);
+    for (var i = 0; i < shape.pts.length; i++) {
+      out[i] = [shape.pts[i][0], shape.h - shape.pts[i][1]];
+    }
+    return { pts: out, w: shape.w, h: shape.h };
+  }
+
+  function alternateShape(shape, mode) {
+    if (mode === 'lr') return mirrorX(shape);
+    if (mode === 'tb') return mirrorY(shape);
+    return rotate(shape.pts, shape.w, shape.h, 180);   // 默认：180° 翻转
+  }
+
   /* ---------- 栅格蒙版（用于求交错排距） ---------- */
 
   function buildMask(pts, w, h, pad) {
@@ -276,19 +300,22 @@
 
   /* ---------- 排样方案 ---------- */
 
-  function arrangements(poly, width, gap, allowInterlock, fixedRot) {
+  function arrangements(poly, width, gap, allowInterlock, fixedRot, mode) {
     var fixed = (typeof fixedRot === 'number' && isFinite(fixedRot)) ? fixedRot : null;
-    var key = width + '|' + gap + '|' + (allowInterlock ? 1 : 0) + '|' + (fixed === null ? 'auto' : fixed);
+    var modeKey = mode || 'default';
+    var key = width + '|' + gap + '|' + (allowInterlock ? 1 : 0) + '|' +
+      (fixed === null ? 'auto' : fixed) + '|' + modeKey;
     if (poly._arr && poly._arr.key === key) return poly._arr.options;
 
     var options = [];
     var angles = fixed === null ? [0, 90] : [fixed];
     angles.forEach(function (userDeg) {
-      // 调整角度为顺时针；数学坐标逆时针为正，故取负
+      // 先按方向旋转，再按交错方式生成相邻片
       var a = rotate(poly.pts, poly.w, poly.h, -userDeg);
-      var b = rotate(a.pts, a.w, a.h, 180);
+      var b = alternateShape(a, modeKey);
       var opt = {
         rot: userDeg,
+        mode: modeKey,
         w: a.w, h: a.h,
         ptsA: a.pts,
         ptsB: b.pts,
@@ -302,13 +329,16 @@
         opt.perRow = perPlain;
         options.push(opt);
       }
-      if (allowInterlock && opt.w >= 10) {
+      if (allowInterlock && modeKey !== 'none' && opt.w >= 10) {
         var res = exactPitch(opt, gap);
+        var improved = false;
         if (res && res.pitch < opt.w - 0.01) {
           var perInt = Math.floor((width - opt.w) / res.pitch) + 1;
           if (perInt > perPlain) {
+            improved = true;
             options.push({
               rot: userDeg,
+              mode: modeKey,
               w: opt.w, h: opt.h,
               ptsA: opt.ptsA, ptsB: opt.ptsB,
               interlock: true,
@@ -319,6 +349,20 @@
             });
           }
         }
+        // 明确选择左右/上下交错时，即使排距无法再压缩，也保留相邻片翻转的外观
+        if (!improved && (modeKey === 'lr' || modeKey === 'tb') && perPlain >= 1) {
+          options.push({
+            rot: userDeg,
+            mode: modeKey,
+            w: opt.w, h: opt.h,
+            ptsA: opt.ptsA, ptsB: opt.ptsB,
+            interlock: true,
+            pitch: opt.w + gap,
+            clearance: gap,
+            rowH: opt.h,
+            perRow: perPlain
+          });
+        }
       }
     });
 
@@ -326,16 +370,20 @@
     return options;
   }
 
-  function chooseOption(poly, count, width, gap, allowInterlock, fixedRot) {
-    var opts = arrangements(poly, width, gap, allowInterlock, fixedRot);
+  function chooseOption(poly, count, width, gap, allowInterlock, fixedRot, mode) {
+    var opts = arrangements(poly, width, gap, allowInterlock, fixedRot, mode);
+    var preferInter = (mode === 'lr' || mode === 'tb');
     var best = null;
     for (var i = 0; i < opts.length; i++) {
       var o = opts[i];
       var rows = Math.ceil(count / o.perRow);
       var len = rows * o.rowH + (rows - 1) * gap;
-      if (!best || len < best.length - 1e-9) {
+      var better = !best || len < best.length - 1e-9;
+      var tieInter = preferInter && best && Math.abs(len - best.length) <= 1e-9 &&
+        o.interlock && !best.interlock;
+      if (better || tieInter) {
         best = {
-          rot: o.rot, w: o.w, h: o.h, ptsA: o.ptsA, ptsB: o.ptsB,
+          rot: o.rot, mode: o.mode, w: o.w, h: o.h, ptsA: o.ptsA, ptsB: o.ptsB,
           interlock: o.interlock, pitch: o.pitch, rowH: o.rowH,
           clearance: o.clearance === undefined ? gap : o.clearance,
           perRow: o.perRow, rows: rows, length: len
@@ -375,7 +423,9 @@
         }
 
         var fixedRot = (typeof part.rot === 'number' && isFinite(part.rot)) ? part.rot : null;
-        var opt = chooseOption(poly, count, width, gap, allowInterlock, fixedRot);
+        var mode = part.mode || 'default';
+        var effectiveInterlock = allowInterlock && mode !== 'none';
+        var opt = chooseOption(poly, count, width, gap, effectiveInterlock, fixedRot, mode);
         if (!opt) {
           warnings.push('「' + part.name + '」' + sizes[si].label + '码尺寸超出幅宽，无法排料。');
           continue;
@@ -395,6 +445,7 @@
           interlock: opt.interlock,
           clearance: opt.clearance,
           rot: opt.rot,
+          mode: opt.mode,
           fixedRot: fixedRot,
           w: opt.w,
           h: opt.h,
