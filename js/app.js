@@ -128,6 +128,7 @@
         index: i,
         name: p.name || ('配件' + String(i + 1).padStart(2, '0')),
         qty: 1,
+        rot: null,
         color: COLORS[i % COLORS.length],
         sizes: p.sizes.map(normalizePoly)
       };
@@ -239,12 +240,20 @@
 
   /* ================= 配件表 ================= */
 
-  function thumbSvg(poly, color) {
+  function normDeg(d) {
+    d = Math.round(d / 45) * 45;
+    return ((d % 360) + 360) % 360;
+  }
+
+  function thumbSvg(poly, color, rot) {
+    var shape = (typeof rot === 'number' && isFinite(rot) && normDeg(rot) !== 0)
+      ? Nesting.rotateShape(poly.pts, poly.w, poly.h, -normDeg(rot))
+      : poly;
     var size = 42, pad = 3;
-    var s = Math.min((size - pad * 2) / Math.max(poly.w, 0.1), (size - pad * 2) / Math.max(poly.h, 0.1));
-    var dx = (size - poly.w * s) / 2;
-    var dy = (size - poly.h * s) / 2;
-    var pts = poly.pts.map(function (p) {
+    var s = Math.min((size - pad * 2) / Math.max(shape.w, 0.1), (size - pad * 2) / Math.max(shape.h, 0.1));
+    var dx = (size - shape.w * s) / 2;
+    var dy = (size - shape.h * s) / 2;
+    var pts = shape.pts.map(function (p) {
       return round1(dx + p[0] * s) + ',' + round1(size - dy - p[1] * s);
     }).join(' ');
     return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="' + size + '">' +
@@ -256,10 +265,16 @@
     var tbody = $('#partsTbody');
     tbody.innerHTML = state.parts.map(function (p, i) {
       var big = p.sizes[p.sizes.length - 1] || p.sizes[0];
+      var rotText = (p.rot == null) ? '自动' : p.rot + '°';
       return '<tr data-part-row="' + i + '">' +
-        '<td class="thumb-cell"><div class="thumb">' + thumbSvg(big, p.color) + '</div></td>' +
+        '<td class="thumb-cell"><div class="thumb">' + thumbSvg(big, p.color, p.rot) + '</div></td>' +
         '<td><input class="part-name-input" data-part-name="' + i + '" value="' + escapeHtml(p.name) +
           '" aria-label="配件名称"></td>' +
+        '<td class="num"><div class="rot-ctrl">' +
+          '<button type="button" class="rot-btn" data-part-rot="' + i + '" data-rot-dir="-1" title="逆时针 45°">↺</button>' +
+          '<button type="button" class="rot-val" data-rot-val="' + i + '" data-rot-reset="' + i + '" title="点击恢复自动">' + rotText + '</button>' +
+          '<button type="button" class="rot-btn" data-part-rot="' + i + '" data-rot-dir="1" title="顺时针 45°">↻</button>' +
+        '</div></td>' +
         '<td class="num"><div class="stepper">' +
           '<button data-step="-1" data-part-step="' + i + '" aria-label="减少">−</button>' +
           '<span class="qty" data-part-qty="' + i + '">' + p.qty + '</span>' +
@@ -284,6 +299,42 @@
         saveSettings();
       });
     });
+
+    $$('[data-part-rot]', tbody).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var i = Number(btn.getAttribute('data-part-rot'));
+        var dir = Number(btn.getAttribute('data-rot-dir'));
+        var p = state.parts[i];
+        var base = (typeof p.rot === 'number') ? p.rot : 0;
+        p.rot = normDeg(base + dir * 45);
+        updatePartRot(i);
+        recalc();
+        saveSettings();
+      });
+    });
+
+    $$('[data-rot-reset]', tbody).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var i = Number(btn.getAttribute('data-rot-reset'));
+        if (state.parts[i].rot == null) return;
+        state.parts[i].rot = null;
+        updatePartRot(i);
+        recalc();
+        saveSettings();
+      });
+    });
+  }
+
+  function updatePartRot(i) {
+    var p = state.parts[i];
+    var label = $('[data-rot-val="' + i + '"]');
+    if (label) label.textContent = (p.rot == null) ? '自动' : p.rot + '°';
+    var row = $('[data-part-row="' + i + '"]');
+    var thumb = row && row.querySelector('.thumb');
+    if (thumb) {
+      var big = p.sizes[p.sizes.length - 1] || p.sizes[0];
+      thumb.innerHTML = thumbSvg(big, p.color, p.rot);
+    }
   }
 
   /* ================= 数据源 ================= */
@@ -764,8 +815,9 @@
 
             // 配件标签（每组第一次出现）
             if (seg.rowOffset === 0 && i === 0 && hPx > 12) {
+              var rotTag = (g.fixedRot === null || g.fixedRot === undefined) ? '' : (' · ' + g.fixedRot + '°');
               var label = g.partName + ' · ' + g.sizeLabel + '码 · ' + fmtInt(g.count) +
-                '片 · 每排' + g.perRow + (g.interlock ? '（交错）' : '');
+                '片 · 每排' + g.perRow + (g.interlock ? '（交错）' : '') + rotTag;
               ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
               var tw = ctx.measureText(label).width;
               var tx = px(4);
@@ -942,11 +994,12 @@
     rows.push(['合计', state.sizes.reduce(function (a, s) { return a + (s.pairs || 0); }, 0),
       plan.totalPieces, (plan.totalArea / 1e6).toFixed(2), (plan.netLength / 1000).toFixed(1)]);
     rows.push([]);
-    rows.push(['配件', '每双用量', '片数', '面积(m²)', '排料长度(m)', '利用率']);
+    rows.push(['配件', '方向', '每双用量', '片数', '面积(m²)', '排料长度(m)', '利用率']);
     state.parts.forEach(function (p, i) {
       var r = plan.byPart[i];
       if (!r || !r.pieces) return;
-      rows.push([p.name, p.qty, r.pieces, (r.area / 1e6).toFixed(2), (r.length / 1000).toFixed(1),
+      rows.push([p.name, p.rot == null ? '自动' : p.rot + '°', p.qty, r.pieces,
+        (r.area / 1e6).toFixed(2), (r.length / 1000).toFixed(1),
         (r.area / (usableWidth() * r.length) * 100).toFixed(1) + '%']);
     });
 
@@ -1011,7 +1064,7 @@
       localStorage.setItem(STORE_KEY, JSON.stringify({
         version: STORE_VERSION,
         sizes: state.sizes.map(function (s) { return { label: s.label, pairs: s.pairs, graded: !!s.graded }; }),
-        parts: state.parts.map(function (p) { return { name: p.name, qty: p.qty }; }),
+        parts: state.parts.map(function (p) { return { name: p.name, qty: p.qty, rot: p.rot }; }),
         gap: state.gap,
         width: state.width,
         pairFactor: state.pairFactor,
@@ -1037,6 +1090,9 @@
           if (typeof d.parts[i].name === 'string' && d.parts[i].name) p.name = d.parts[i].name;
           p.qty = clamp(Number(d.parts[i].qty), 0, 99);
           if (!isFinite(p.qty)) p.qty = 1;
+          if (typeof d.parts[i].rot === 'number' && isFinite(d.parts[i].rot)) {
+            p.rot = normDeg(d.parts[i].rot);
+          }
         });
       }
       if (typeof d.gap === 'number') state.gap = clamp(d.gap, 2, 20);

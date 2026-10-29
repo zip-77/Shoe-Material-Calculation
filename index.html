@@ -126,7 +126,7 @@
     <section class="card">
       <div class="card-head">
         <h2>配件清单</h2>
-        <span class="hint">每双用量可增减；名称可改</span>
+        <span class="hint">用量可增减；方向可 ±45°；点击角度恢复自动</span>
       </div>
       <div class="table-scroll">
         <table class="parts-table">
@@ -134,6 +134,7 @@
             <tr>
               <th class="thumb-cell">图形</th>
               <th>配件名称</th>
+              <th class="num" title="每次 ±45°，点击角度值恢复自动">方向</th>
               <th class="num">每双用量</th>
               <th class="num">总片数</th>
               <th class="num" title="各尺码平均值">单件面积</th>
@@ -203,7 +204,7 @@
         <h3>假设</h3>
         <ul>
           <li>裁片外轮廓即净样，未计缝份；如需缝份请在排料间距中体现。</li>
-          <li>裁片可旋转、翻转，无方向性（如印花、毛向请关闭交错套排并预留余量）。</li>
+          <li>裁片可旋转、翻转；可在配件清单中给单个配件设置 0–315° 的强制排放方向（每次 ±45°），默认自动在 0°/90° 中择优。设置方向后，该配件只按此方向排料。</li>
           <li>识别到的每个闭合轮廓视为一个独立配件，默认每双 1 片；重复轮廓（如面料/里料）会分别列出，可按需改为 0。</li>
           <li>本工具给出的是工程估算值，不替代 CAD 排料软件的最优排版。</li>
         </ul>

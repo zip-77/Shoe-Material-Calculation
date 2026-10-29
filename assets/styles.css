@@ -556,3 +556,31 @@ input[type="number"] { -moz-appearance: textfield; }
 
 .total-row td { font-weight: 600; border-top: 1px solid var(--line-strong); background: #fafbfd; }
 .empty-row { text-align: center; color: var(--muted); padding: 24px 8px !important; }
+
+/* 配件方向控制 */
+.rot-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: #f4f6fa;
+  border-radius: 8px;
+  padding: 2px;
+}
+.rot-btn, .rot-val {
+  appearance: none;
+  border: none;
+  background: transparent;
+  height: 22px;
+  border-radius: 6px;
+  color: #4b5568;
+  cursor: pointer;
+  line-height: 1;
+}
+.rot-btn { width: 22px; font-size: 14px; padding: 0; }
+.rot-val {
+  min-width: 40px;
+  padding: 0 4px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rot-btn:hover, .rot-val:hover { background: #fff; box-shadow: 0 1px 2px rgba(20, 32, 55, .12); }

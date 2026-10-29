@@ -46,7 +46,7 @@ def parse_polylines(pairs):
                 pts = [(v.get("x", 0.0), v.get("y", 0.0)) for v in verts]
                 if len(pts) >= 3:
                     closed = bool(int(poly.get("flags", 0)) & 1) or (
-                        len(pts) > 2 and math.dist(pts[0], pts[-1]) < 0.5
+                        len(pts) > 2 and math.dist(pts[0], pts[-1]) < 1.0
                     )
                     result.append({"pts": pts, "closed": closed})
                 poly = None
@@ -192,12 +192,16 @@ def extract(polylines):
     warnings = []
     for r in rows:
         r["items"].sort(key=lambda c: c["bbox"][0])
-        if len(r["items"]) != size_count:
-            warnings.append("有一行识别到 %d 个裁片，与尺码数 %d 不一致，已按 x 顺序对应" % (len(r["items"]), size_count))
+
+    rows = split_rows(rows, size_count, warnings)
 
     parts = []
     for r in rows:
         items = r["items"]
+        if len(items) < size_count:
+            warnings.append("有一排只识别到 %d 个裁片（尺码数 %d），缺少的尺码由相邻裁片补齐" % (len(items), size_count))
+        elif len(items) > size_count:
+            warnings.append("有一排识别到 %d 个裁片，超出尺码数，已取前 %d 个" % (len(items), size_count))
         polys = []
         for i in range(size_count):
             if i < len(items):
@@ -210,6 +214,50 @@ def extract(polylines):
 
     parts.sort(key=lambda p: -p["area"])
     return parts, size_count, warnings
+
+
+def split_rows(rows, size_count, warnings):
+    """上边缘接近的两组配件会被聚成一行，按 x 方向的大间隙拆开。"""
+    out = []
+    for row in rows:
+        items = row["items"]
+        if len(items) <= size_count:
+            out.append(row)
+            continue
+        group_count = (len(items) + size_count - 1) // size_count
+        gaps = []
+        for i in range(len(items) - 1):
+            gaps.append((i, items[i + 1]["bbox"][0] - items[i]["bbox"][2]))
+        ordered = sorted(g for _, g in gaps)
+        median = ordered[len(ordered) // 2] if ordered else 0
+        threshold = max(6.0, median * 2 + 4)
+        significant = [i for i, g in gaps if g > threshold]
+
+        if len(significant) == group_count - 1:
+            cuts = significant
+        elif len(items) % size_count == 0:
+            cuts = [c * size_count - 1 for c in range(1, len(items) // size_count)]
+            warnings.append("一排有 %d 个裁片，未找到明显分组间隙，已按每 %d 个一组拆分，请核对"
+                            % (len(items), size_count))
+        else:
+            warnings.append("一排有 %d 个裁片，无法可靠拆分，请检查图纸是否并排绘制了多组配件" % len(items))
+            out.append(row)
+            continue
+
+        start = 0
+        for cut in cuts:
+            out.append(make_row(items[start:cut + 1]))
+            start = cut + 1
+        out.append(make_row(items[start:]))
+        if significant:
+            warnings.append("有 %d 个裁片并排在同一高度，已按间隙拆分为 %d 组配件"
+                            % (len(items), group_count))
+    return out
+
+
+def make_row(items):
+    top = sum(c["bbox"][1] for c in items) / max(1, len(items))
+    return {"top": top, "items": items}
 
 
 def make_data(parts, size_count):

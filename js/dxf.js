@@ -138,7 +138,7 @@
 
     function finishPoly() {
       if (poly && vertices.length >= 3) {
-        var closed = (poly.flags & 1) === 1 || dist(vertices[0], vertices[vertices.length - 1]) < 0.5;
+        var closed = (poly.flags & 1) === 1 || dist(vertices[0], vertices[vertices.length - 1]) < 1.0;
         polylines.push({ pts: vertices, closed: closed });
       }
       poly = null;
@@ -156,7 +156,7 @@
             for (var k = 0; k < extra.length; k++) pts.push(extra[k]);
           }
         }
-        var closedLw = (lw.flags & 1) === 1 || dist(pts[0], pts[pts.length - 1]) < 0.5;
+        var closedLw = (lw.flags & 1) === 1 || dist(pts[0], pts[pts.length - 1]) < 1.0;
         // 闭合段上的凸度（圆角）也要补成弧线
         if (closedLw && lwPts.length > 1 && lwPts[lwPts.length - 1].bulge) {
           var last = lwPts[lwPts.length - 1];
@@ -285,13 +285,19 @@
 
     rows.forEach(function (row) {
       row.items.sort(function (a, b) { return a.bbox[0] - b.bbox[0]; });
-      if (row.items.length !== sizeCount) {
-        warnings.push('有一排识别到 ' + row.items.length + ' 个裁片，与尺码数 ' + sizeCount +
-          ' 不一致，已按左侧顺序对应。');
-      }
     });
 
+    // 同一高度可能并排画着两组不同配件（上边缘接近，会被聚成一行），按 x 间隙拆开
+    rows = splitRows(rows, sizeCount, warnings);
+
     var parts = rows.map(function (row) {
+      if (row.items.length < sizeCount) {
+        warnings.push('有一排只识别到 ' + row.items.length + ' 个裁片（尺码数 ' + sizeCount +
+          '），缺少的尺码由相邻裁片补齐。');
+      } else if (row.items.length > sizeCount) {
+        warnings.push('有一排识别到 ' + row.items.length + ' 个裁片，超出尺码数，已取前 ' +
+          sizeCount + ' 个。');
+      }
       var polys = [];
       for (var i = 0; i < sizeCount; i++) {
         var item = row.items[Math.min(i, row.items.length - 1)];
@@ -309,11 +315,64 @@
     });
     parts.sort(function (a, b) { return b.avgArea - a.avgArea; });
     parts.forEach(function (part, i) {
-      part.name = '部件' + String(i + 1).padStart(2, '0');
+      part.name = '配件' + String(i + 1).padStart(2, '0');
       delete part.avgArea;
     });
 
     return { parts: parts, sizeCount: sizeCount, warnings: warnings };
+  }
+
+  // 把因上边缘接近而被合并的行，按 x 方向的大间隙拆成多个配件行
+  function splitRows(rows, sizeCount, warnings) {
+    var out = [];
+    rows.forEach(function (row) {
+      var items = row.items;
+      if (items.length <= sizeCount) { out.push(row); return; }
+
+      var groupCount = Math.ceil(items.length / sizeCount);
+      var gaps = [];
+      for (var i = 0; i + 1 < items.length; i++) {
+        gaps.push({ i: i, g: items[i + 1].bbox[0] - items[i].bbox[2] });
+      }
+      var sorted = gaps.map(function (x) { return x.g; }).sort(function (a, b) { return a - b; });
+      var median = sorted[Math.floor(sorted.length / 2)] || 0;
+      var threshold = Math.max(6, median * 2 + 4);
+      var significant = gaps.filter(function (x) { return x.g > threshold; })
+                            .map(function (x) { return x.i; });
+
+      var cuts;
+      if (significant.length === groupCount - 1) {
+        cuts = significant;
+      } else if (items.length % sizeCount === 0) {
+        cuts = [];
+        for (var c = 1; c < items.length / sizeCount; c++) cuts.push(c * sizeCount - 1);
+        warnings.push('一排有 ' + items.length + ' 个裁片，未找到明显的分组间隙，已按每 ' +
+          sizeCount + ' 个一组拆分，请核对。');
+      } else {
+        warnings.push('一排有 ' + items.length + ' 个裁片，无法可靠拆分，请检查图纸是否并排绘制了多组配件。');
+        out.push(row);
+        return;
+      }
+
+      var start = 0;
+      cuts.forEach(function (cut) {
+        out.push(makeRow(items.slice(start, cut + 1)));
+        start = cut + 1;
+      });
+      out.push(makeRow(items.slice(start)));
+
+      if (significant.length) {
+        warnings.push('有 ' + items.length + ' 个裁片并排在同一高度，已按间隙拆分为 ' +
+          groupCount + ' 组配件。');
+      }
+    });
+    return out;
+  }
+
+  function makeRow(items) {
+    var top = 0;
+    for (var i = 0; i < items.length; i++) top += items[i].bbox[1];
+    return { top: top / items.length, items: items };
   }
 
   function mode(arr) {

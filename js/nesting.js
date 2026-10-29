@@ -19,6 +19,8 @@
   function rotate(pts, w, h, deg) {
     var out = [];
     var i, p;
+    deg = ((deg % 360) + 360) % 360;
+    if (deg === 0) return { pts: pts, w: w, h: h };
     if (deg === 90) {
       for (i = 0; i < pts.length; i++) {
         p = pts[i];
@@ -40,7 +42,28 @@
       }
       return { pts: out, w: h, h: w };
     }
-    return { pts: pts, w: w, h: h };
+
+    // 任意角度（45° 步进）：绕包围盒中心旋转后归零
+    var rad = deg * Math.PI / 180;
+    var cos = Math.cos(rad), sin = Math.sin(rad);
+    var cx = w / 2, cy = h / 2;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    var out2 = new Array(pts.length);
+    for (i = 0; i < pts.length; i++) {
+      var vx = pts[i][0] - cx, vy = pts[i][1] - cy;
+      var nx = vx * cos - vy * sin;
+      var ny = vx * sin + vy * cos;
+      out2[i] = [nx, ny];
+      if (nx < minX) minX = nx;
+      if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny;
+      if (ny > maxY) maxY = ny;
+    }
+    for (i = 0; i < out2.length; i++) {
+      out2[i][0] -= minX;
+      out2[i][1] -= minY;
+    }
+    return { pts: out2, w: maxX - minX, h: maxY - minY };
   }
 
   /* ---------- 栅格蒙版（用于求交错排距） ---------- */
@@ -253,16 +276,19 @@
 
   /* ---------- 排样方案 ---------- */
 
-  function arrangements(poly, width, gap, allowInterlock) {
-    var key = width + '|' + gap + '|' + (allowInterlock ? 1 : 0);
+  function arrangements(poly, width, gap, allowInterlock, fixedRot) {
+    var fixed = (typeof fixedRot === 'number' && isFinite(fixedRot)) ? fixedRot : null;
+    var key = width + '|' + gap + '|' + (allowInterlock ? 1 : 0) + '|' + (fixed === null ? 'auto' : fixed);
     if (poly._arr && poly._arr.key === key) return poly._arr.options;
 
     var options = [];
-    [0, 90].forEach(function (deg) {
-      var a = rotate(poly.pts, poly.w, poly.h, deg);
+    var angles = fixed === null ? [0, 90] : [fixed];
+    angles.forEach(function (userDeg) {
+      // 调整角度为顺时针；数学坐标逆时针为正，故取负
+      var a = rotate(poly.pts, poly.w, poly.h, -userDeg);
       var b = rotate(a.pts, a.w, a.h, 180);
       var opt = {
-        rot: deg,
+        rot: userDeg,
         w: a.w, h: a.h,
         ptsA: a.pts,
         ptsB: b.pts,
@@ -282,7 +308,7 @@
           var perInt = Math.floor((width - opt.w) / res.pitch) + 1;
           if (perInt > perPlain) {
             options.push({
-              rot: deg,
+              rot: userDeg,
               w: opt.w, h: opt.h,
               ptsA: opt.ptsA, ptsB: opt.ptsB,
               interlock: true,
@@ -300,8 +326,8 @@
     return options;
   }
 
-  function chooseOption(poly, count, width, gap, allowInterlock) {
-    var opts = arrangements(poly, width, gap, allowInterlock);
+  function chooseOption(poly, count, width, gap, allowInterlock, fixedRot) {
+    var opts = arrangements(poly, width, gap, allowInterlock, fixedRot);
     var best = null;
     for (var i = 0; i < opts.length; i++) {
       var o = opts[i];
@@ -342,13 +368,14 @@
         var count = Math.round(pairs * part.qty * pairFactor);
         if (count <= 0) continue;
 
-        if (poly.w > width) {
-          warnings.push('「' + part.name + '」' + sizes[si].label + '码宽 ' + poly.w.toFixed(0) +
-            'mm，超过可用幅宽 ' + width + 'mm，无法排料。');
+        if (poly.w > width && poly.h > width) {
+          warnings.push('「' + part.name + '」' + sizes[si].label + '码外形 ' + poly.w.toFixed(0) +
+            '×' + poly.h.toFixed(0) + 'mm，超过可用幅宽 ' + width + 'mm，无法排料。');
           continue;
         }
 
-        var opt = chooseOption(poly, count, width, gap, allowInterlock);
+        var fixedRot = (typeof part.rot === 'number' && isFinite(part.rot)) ? part.rot : null;
+        var opt = chooseOption(poly, count, width, gap, allowInterlock, fixedRot);
         if (!opt) {
           warnings.push('「' + part.name + '」' + sizes[si].label + '码尺寸超出幅宽，无法排料。');
           continue;
@@ -368,6 +395,7 @@
           interlock: opt.interlock,
           clearance: opt.clearance,
           rot: opt.rot,
+          fixedRot: fixedRot,
           w: opt.w,
           h: opt.h,
           ptsA: opt.ptsA,
@@ -472,6 +500,7 @@
 
   global.Nesting = {
     computePlan: computePlan,
-    arrangements: arrangements
+    arrangements: arrangements,
+    rotateShape: rotate
   };
 })(window);
