@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鞋料用量计算 · 排料估算</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a5bd7'/%3E%3Cpath d='M9 8h14v5H9zM9 16h9v9H9zM21 16h3v9h-3z' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<div id="errorBanner" class="error-banner" hidden></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 3h16v4H4zM4 10h10v11H4zM17 10h3v11h-3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    </span>
+    <div class="brand-text">
+      <h1>鞋料用量计算</h1>
+      <p>DXF 裁片识别 · 横排套料 · 用料与卷数估算</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="source-badge" id="sourceBadge">示例数据</span>
+    <button class="btn" id="btnImport">导入 DXF</button>
+    <button class="btn ghost" id="btnSample">恢复示例</button>
+    <button class="btn ghost" id="btnExport">导出 CSV</button>
+    <input type="file" id="fileInput" accept=".dxf,text/plain" hidden>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+
+    <section class="card">
+      <div class="card-head">
+        <h2>订单数量</h2>
+        <span class="hint">单位：双</span>
+      </div>
+      <div class="size-grid">
+        <div class="sg-row sg-head">
+          <span>尺码</span>
+          <span class="num">数量（双）</span>
+          <span class="num">片数</span>
+          <span class="num">米数</span>
+          <span></span>
+        </div>
+        <div id="sizeTbody"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn small" id="btnAddSize">+ 添加尺码</button>
+        <button class="btn small ghost" id="btnExample">示例订单</button>
+      </div>
+      <div class="renumber">
+        <span class="hint">批量重编号</span>
+        <input type="number" id="startSize" min="1" max="99" value="31" aria-label="起始尺码">
+        <button class="btn tiny ghost" id="btnRenumber">应用</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>工艺参数</h2></div>
+      <div class="field">
+        <label for="widthInput">坯布幅宽</label>
+        <div class="inline-input">
+          <select id="widthInput">
+            <option value="1350">1.35 m</option>
+            <option value="1360">1.36 m</option>
+            <option value="1370">1.37 m</option>
+            <option value="1380">1.38 m</option>
+            <option value="1390">1.39 m</option>
+            <option value="1400" selected>1.40 m</option>
+          </select>
+        </div>
+        <p class="hint" id="widthHint">布边每边扣 15 mm，有效幅宽 1370 mm</p>
+      </div>
+      <div class="field">
+        <label>每双片数</label>
+        <div class="segmented" id="pairFactor">
+          <button type="button" data-v="1" class="active">1 片 / 双</button>
+          <button type="button" data-v="2">2 片（左右脚）</button>
+        </div>
+        <p class="hint" style="margin-top:6px">默认每双 1 片；图纸若是一只鞋的裁片，一双需 2 片。</p>
+      </div>
+      <div class="field">
+        <label for="gapInput">裁片间距（≥ 2 mm）</label>
+        <div class="inline-input">
+          <input type="number" id="gapInput" min="2" max="20" step="0.5" value="3">
+          <span class="unit">mm</span>
+        </div>
+      </div>
+      <div class="field switch-field">
+        <label>
+          <input type="checkbox" id="interlockInput" checked>
+          <span>交错套排（翻转套料）</span>
+        </label>
+        <p class="hint">关闭后按直排计算，用料更保守。</p>
+      </div>
+      <dl class="specs">
+        <div><dt>有效幅宽</dt><dd><span id="usableSpec">1370</span> mm</dd></div>
+        <div><dt>布边余量</dt><dd>每边 15 mm</dd></div>
+        <div><dt>每份料</dt><dd><span id="rollSpec">1.40 m × 45 m</span></dd></div>
+        <div><dt>图形单位</dt><dd>毫米（净样）</dd></div>
+      </dl>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>数据源</h2></div>
+      <div class="source-info" id="sourceInfo"></div>
+      <div class="btn-row">
+        <button class="btn small" id="btnImport2">导入 DXF</button>
+        <button class="btn small ghost" id="btnSample2">示例数据</button>
+      </div>
+      <p class="hint">自动识别闭合轮廓、尺码列与配件行；支持 POLYLINE / LWPOLYLINE。导入的文件刷新后不会保留，可用「导出 CSV」存档。</p>
+    </section>
+
+  </aside>
+
+  <section class="main">
+
+    <div class="kpis" id="kpis"></div>
+    <div class="range-strip" id="rangeStrip"></div>
+    <div class="warn-box" id="warnBox" hidden></div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>配件清单</h2>
+        <span class="hint">每双用量可增减；名称可改</span>
+      </div>
+      <div class="table-scroll">
+        <table class="parts-table">
+          <thead>
+            <tr>
+              <th class="thumb-cell">图形</th>
+              <th>配件名称</th>
+              <th class="num">每双用量</th>
+              <th class="num">总片数</th>
+              <th class="num" title="各尺码平均值">单件面积</th>
+              <th class="num">总面积</th>
+              <th class="num">排料长度</th>
+              <th class="num">利用率</th>
+            </tr>
+          </thead>
+          <tbody id="partsTbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card viz-card">
+      <div class="card-head">
+        <h2>排料可视化</h2>
+        <div class="viz-controls">
+          <label class="zoom-control">缩放
+            <input type="range" id="zoomInput" min="1" max="8" step="0.1" value="1">
+          </label>
+          <button class="btn tiny ghost" id="btnFit">适应宽度</button>
+        </div>
+      </div>
+      <div class="viz-stage">
+        <canvas id="vizCanvas"></canvas>
+      </div>
+      <div class="legend" id="legend"></div>
+      <p class="hint" id="vizHint">滚轮上下滚动 · 拖动平移 · 右侧缩略条可点击跳转。虚线为每份料（45 m）的分界，灰色为卷尾余料。</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>尺码汇总</h2>
+        <span class="hint">各尺码单独核算</span>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="sizeSummary">
+          <thead>
+            <tr>
+              <th>尺码</th>
+              <th class="num">双数</th>
+              <th class="num">片数</th>
+              <th class="num">面积 (m²)</th>
+              <th class="num">排料长度 (m)</th>
+              <th class="num">占长度</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <details class="card info-card">
+      <summary>计算说明与假设</summary>
+      <div class="info-body">
+        <h3>用料公式</h3>
+        <ul>
+          <li>片数 = 双数 × 每双用量 × 每双片数（左右脚时为 2）。</li>
+          <li>坯布幅宽可在 1.35–1.40 m 之间按 0.01 m 选择，默认 1.40 m；布边每边扣 15 mm，<b>有效幅宽 = 坯布幅宽 − 30 mm</b>（1.40 m 时为 1370 mm）。</li>
+          <li>横排：每排可放片数 = ⌊(有效幅宽 + 间距) ÷ (片宽 + 间距)⌋；开启交错套排时，先用 2mm 栅格估算排距，再用<b>精确多边形距离</b>校验（含间距），取其最小可行值作为排距。</li>
+          <li>排数 = ⌈片数 ÷ 每排片数⌉；单组长度 = 排数 × 排高 + (排数 − 1) × 间距。</li>
+          <li>校验范围覆盖整排的 A-B-A-B 交替关系（相邻片、隔一片、隔两片…直到包围盒已拉开），以及排与排之间的间距；因此<b>任意两片不会重叠</b>，且片间最小距离 ≥ 裁片间距（默认 3mm，最低 2mm）。</li>
+          <li>各配件、各尺码依次沿布长排布，满 45 m 自动换卷，卷尾余料计入损耗。</li>
+          <li>份数 = 卷数；备料长度 = 份数 × 45 m。</li>
+          <li>利用率 = 裁片总面积 ÷ (有效幅宽 × 净排料长度)。</li>
+        </ul>
+        <h3>假设</h3>
+        <ul>
+          <li>裁片外轮廓即净样，未计缝份；如需缝份请在排料间距中体现。</li>
+          <li>裁片可旋转、翻转，无方向性（如印花、毛向请关闭交错套排并预留余量）。</li>
+          <li>识别到的每个闭合轮廓视为一个独立配件，默认每双 1 片；重复轮廓（如面料/里料）会分别列出，可按需改为 0。</li>
+          <li>本工具给出的是工程估算值，不替代 CAD 排料软件的最优排版。</li>
+        </ul>
+      </div>
+    </details>
+
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="data/parts.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/nesting.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
